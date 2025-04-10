@@ -8,5 +8,6 @@ BRAM --> Block Random Access Memory
 Inputs:
 Outputs:
 Goal:
+  Implement a True Dual Port BRAM
   Provide fast and effienct memory storage for data and intructions
 */
