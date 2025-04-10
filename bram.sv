@@ -1,10 +1,11 @@
 /*
 BRAM --> Block Random Access Memory
-  Used to store large amounts of memory in your FPGA
-  Close proximity to the FPGA logic circuits --> high speed access 
-  Good for rapid retrieval 
-  Often used to store Lookup tables
-
+  - Used to store large amounts of memory in your FPGA
+  - Close proximity to the FPGA logic circuits --> high speed access 
+  - Good for rapid retrieval 
+  - Often used to store Lookup tables
+  - True Dual Port
+    Allows you to read and write from both sides
 Inputs:
 Outputs:
 Goal:
