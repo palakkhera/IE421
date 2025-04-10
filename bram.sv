@@ -11,3 +11,8 @@ Goal:
   Implement a True Dual Port BRAM
   Provide fast and effienct memory storage for data and intructions
 */
+
+module bram (input logic variable_in
+             output logic variable_out);
+endmodule
+
