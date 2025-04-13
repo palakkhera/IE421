@@ -1,7 +1,7 @@
 # IE421
 
 
-<b>Instructions to run sample:</b>
+<b>Instructions to install Verilator:</b>
 
 For Windows, open Ubuntu subsystem, then install.
 ```
@@ -20,7 +20,7 @@ sudo apt update
 sudo apt install verilator
 ```
 
-<b>Instructions to install Verilator:</b>
+<b>Instructions to run sample:</b>
 
 Clone repo, then
 ```
