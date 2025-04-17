@@ -1,6 +1,6 @@
 module queue #(
-    parameter DATA_SIZE = 32,
-    parameter FIFO_SIZE = 1024,//MUST BE POWER OF 2!!;
+    parameter DATA_SIZE = 64,
+    parameter FIFO_SIZE = 64,//MUST BE POWER OF 2!!;
     parameter PTR_WIDTH = $clog2(FIFO_SIZE),
     parameter SCAN_SIZE = 16, //MUST BE POWER OF 2!!;
     parameter SCAN_WIDTH = $clog2(SCAN_SIZE)
@@ -8,21 +8,18 @@ module queue #(
     input logic                     clk,
     input logic                     reset,
 
-    input logic                     push_flag,
-    input logic [DATA_SIZE-1:0]     push_data,
+    input logic [1:0]               op_flag, // 00=push, 01=pop, 10=remove, 11=modify
+    input logic [PTR_WIDTH-1:0]     op_index,
+    input logic [DATA_SIZE-1:0]     op_data,
 
-    input logic                     pop_flag,
     output logic [DATA_SIZE-1:0]    pop_data,
-
-    input logic                     remove_flag,
-    input logic [PTR_WIDTH-1:0]     remove_index,
 
     output logic                    full,
     output logic                    empty,
     output logic [PTR_WIDTH:0]      size,
-    output logic                    error_reg,
-    output logic                    error_rem, //
-    output logic                    error_time //Not finished scanning for next head yet!
+    output logic                    error_reg, // “global” push/pop overflow/underflow
+    output logic                    error_rem, // remove/modify invalid
+    output logic                    error_time // Not finished scanning for next head yet!
 );
 
     logic [DATA_SIZE-1:0]       memory[0:FIFO_SIZE-1];
@@ -32,48 +29,52 @@ module queue #(
     logic [PTR_WIDTH-1:0]       tail;
     logic [PTR_WIDTH:0]         counter;
     logic [PTR_WIDTH:0]         real_counter;
+
     logic                       error_t;
     logic                       error_r;
     logic                       error_g;
 
-    
-
     logic [SCAN_SIZE-1: 0]      chunk;
     logic [SCAN_WIDTH: 0]       offset;
+
     logic                       is_pop;
     logic                       is_push;
     logic                       is_remove;
+    logic                       is_modify;
+
     logic [PTR_WIDTH-1:0]       head_next;
     logic [PTR_WIDTH-1:0]       tail_next;
     logic [PTR_WIDTH:0]         real_counter_next;
     logic [PTR_WIDTH:0]         available;
 
-    function automatic logic [SCAN_WIDTH:0] priority16(input logic [SCAN_SIZE-1:0] chunk);
+    function automatic logic [SCAN_WIDTH:0] priority16(input logic [SCAN_SIZE-1:0] c);
         for (int i = 0; i < SCAN_SIZE; i++) begin
-            if (chunk[i]) return i;
+            if (c[i]) return i;
         end
         return SCAN_SIZE;
     endfunction
 
-    always_comb begin //pop; All the modulos are ignored because of the "truncating" feature. Careful when editing!
-        is_pop = (pop_flag && real_counter > 0) ? 1 : 0;
-        head_next = head + is_pop;
+    always_comb begin //All the modulos are ignored because of the "truncating" feature. Careful when editing!
+        is_push     = (op_flag == 2'b00) && (counter < FIFO_SIZE);
+        is_pop      = (op_flag == 2'b01) && (real_counter > 0);
+        is_remove   = (op_flag == 2'b10) && (valid[op_index]);
+        is_modify   = (op_flag == 2'b11) && (valid[op_index]);
+        
+        tail_next   = tail + is_push;
+        head_next   = head + is_pop;
+
         for (int i = 0; i < SCAN_SIZE; i++) begin
             chunk[i] = valid[(head_next + i) & (FIFO_SIZE - 1)];
         end
         offset = priority16(chunk);
+
         available = {1'b0, tail} - {1'b0, head_next};
         if (offset > available) begin
             offset = available;
         end
+
         head_next = head_next + offset;
-    end
 
-    always_comb begin //push & remove;
-        is_push = (push_flag && counter < FIFO_SIZE) ? 1 : 0;
-        tail_next = tail + is_push;
-
-        is_remove = (remove_flag && valid[remove_index]) ? 1 : 0;
         real_counter_next = real_counter + is_push - is_pop - is_remove; //It should be undefined behavior to have both is_pop && is_remove = 1;
     end
 
@@ -91,37 +92,39 @@ module queue #(
             //     memory[i]   <= 0;
             // end (Maybe reset the memory when the queue is recycled?)
         end else begin
-            if (push_flag && (counter < FIFO_SIZE)) begin 
-                memory[tail]    <= push_data;
-                valid[tail]     <= 1;
-            end
-            if (pop_flag && real_counter != 0) begin
-                if (!valid[head]) begin
-                    error_t         <= 1;
-                end else begin
-                    valid[head]     <= 0;
-                    error_t         <= 0;
+            // --- push ---
+            if (op_flag == 2'b00) begin 
+                if (counter < FIFO_SIZE) begin
+                    memory[tail]    <= op_data;
+                    valid[tail]     <= 1;
+                    error_g         <= 0;
+                end else begin 
+                    error_g         <= 1;
                 end
-            end else begin
-                error_t             <= 0;
             end
 
-            if ((push_flag && (counter == FIFO_SIZE)) || (pop_flag && (real_counter == 0))) begin
-                error_g     <= 1;
-            end else begin
-                error_g     <= 0;
+            // --- pop ---
+            if (op_flag == 2'b01) begin
+                if (real_counter > 0) begin
+                    if (!valid[head]) begin
+                        error_t     <= 1;
+                    end else begin
+                        valid[head] <= 0;
+                        error_t     <= 0;
+                    end
+                end else begin
+                    error_g         <= 1; 
+                end
             end
-
-            head            <= head_next;
-            tail            <= tail_next;
-            counter         <= {1'b0, tail} - {1'b0, head}; 
-            real_counter    <= real_counter_next;  
-
-            if (remove_flag) begin
-                if (pop_flag) begin
-                    error_r                 <= 1; //Remove & pop is not allowed!
-                end else if (valid[remove_index]) begin
-                    valid[remove_index]     <= 0;
+            
+            // --- remove & modify ---
+            if (op_flag == 2'b10 || op_flag == 2'b11) begin
+                if (valid[op_index]) begin
+                    if (op_flag == 2'b10) begin
+                        valid[op_index]     <= 0;
+                    end else begin
+                        memory[op_index]    <= op_data;
+                    end
                     error_r                 <= 0;
                 end else begin 
                     error_r                 <= 1;
@@ -129,11 +132,15 @@ module queue #(
             end else begin
                 error_r                     <= 0;    
             end
-        end
 
+            head            <= head_next;
+            tail            <= tail_next;
+            counter         <= {1'b0, tail} - {1'b0, head}; 
+            real_counter    <= real_counter_next;  
+        end
     end
 
-    assign pop_data = valid[head] ? memory[head] : '0; //Need to check error_time first! Don't assume this is correct!
+    assign pop_data     = (op_flag == 2'b01 && valid[head]) ? memory[head] : '0; //Need to check error_time first! Don't assume this is correct!
 
     assign empty        = (real_counter == 0);
     assign full         = (counter == FIFO_SIZE);
