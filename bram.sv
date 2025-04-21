@@ -22,37 +22,42 @@ Goal:
 */
 
 module bram #(
-    parameter DATA_WIDTH = 32,
-    parameter ADDR_WIDTH = 10,
-    parameter DEPTH = 1 << ADDR_WIDTH
+    parameter DATA_WIDTH = 32,         // Width of each memory entry
+    parameter ADDR_WIDTH = 10,         // Width of address (2^ADDR_WIDTH = number of entries)
+    parameter DEPTH = 1 << ADDR_WIDTH  // Total number of memory entries
 )(
-    input  logic clk,
+    input  logic clk,                  // System clock
 
-    // Port A
-    input  logic we_a,
-    input  logic [ADDR_WIDTH-1:0] addr_a,
-    input  logic [DATA_WIDTH-1:0] din_a,
-    output logic [DATA_WIDTH-1:0] dout_a,
+    // Port A interface
+    input  logic we_a,                                 // Write enable for Port A
+    input  logic [ADDR_WIDTH-1:0] addr_a,              // Address for Port A
+    input  logic [DATA_WIDTH-1:0] din_a,               // Data input for Port A
+    output logic [DATA_WIDTH-1:0] dout_a,              // Data output for Port A
 
-    // Port B
-    input  logic we_b,
-    input  logic [ADDR_WIDTH-1:0] addr_b,
-    input  logic [DATA_WIDTH-1:0] din_b,
-    output logic [DATA_WIDTH-1:0] dout_b
+    // Port B interface
+    input  logic we_b,                                 // Write enable for Port B
+    input  logic [ADDR_WIDTH-1:0] addr_b,              // Address for Port B
+    input  logic [DATA_WIDTH-1:0] din_b,               // Data input for Port B
+    output logic [DATA_WIDTH-1:0] dout_b               // Data output for Port B
 );
-
-    // Memory declaration
+    // Create a memory array with DEPTH entries of DATA_WIDTH bits
     logic [DATA_WIDTH-1:0] mem [0:DEPTH-1];
 
     always_ff @(posedge clk) begin
-        // Port A logic
+        //Port A
+        //if write enable is high, store din_a at address addr_a
         if (we_a)
             mem[addr_a] <= din_a;
+
+        //always read from memory at addr_a and assign to dout_a
         dout_a <= mem[addr_a];
 
-        // Port B logic
+        //Port B
+        //if write enable is high, store din_b at address addr_b
         if (we_b)
             mem[addr_b] <= din_b;
+
+        //always read from memory at addr_b and assign to dout_b
         dout_b <= mem[addr_b];
     end
 
