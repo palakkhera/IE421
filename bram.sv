@@ -40,7 +40,7 @@ module bram #(
     input  logic [DATA_WIDTH-1:0] din_b,               // Data input for Port B
     output logic [DATA_WIDTH-1:0] dout_b               // Data output for Port B
 );
-    // Create a memory array with DEPTH entries of DATA_WIDTH bits
+    //create a memory array with depth entries of DATA_WIDTH bits
     logic [DATA_WIDTH-1:0] mem [0:DEPTH-1];
 
     always_ff @(posedge clk) begin
