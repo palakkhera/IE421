@@ -1,0 +1,55 @@
+psuedocode
+
+// Input: Parsed market feed (order_id, order_type, side, price, quantity) + what case
+~ (order_id, price, quantity, side, time, stock_id)
+// Output: Signals to Order ID Lookup and Price 1v1 Manager
+
+MODULE OrderBookLogic:
+
+  INPUT:
+    order_valid : bool
+    order_id    : int
+    order_type  : ENUM {NEW, MODIFY, CANCEL}
+    side        : ENUM {BUY, SELL}
+    price       : int
+    quantity    : int
+
+  OUTPUT:
+    to_order_id_lookup: STRUCT {order_id, action_type}
+    to_price_1v1_mgr: STRUCT {side, price, quantity, action_type}
+
+  INTERNAL VARIABLES:
+    is_duplicate: bool
+    action_type: ENUM {ADD, MODIFY, REMOVE}
+
+  BEGIN
+
+    IF NOT order_valid THEN
+      RETURN
+
+    SWITCH order_type:
+      CASE NEW: //this is adding a new order
+        // Check for duplicate order_id (handled in Order ID Lookup)
+        action_type ← ADD
+
+      CASE MODIFY: //this is modifying an order
+        // Modification assumes order_id exists (validated by Order ID Lookup)
+        action_type ← MODIFY
+
+      CASE CANCEL: //this is cancelling an order
+        // Cancellation also assumes order_id exists
+        action_type ← REMOVE
+
+    END SWITCH
+
+    // Forward order_id info to Order ID Lookup block
+    to_order_id_lookup.order_id ← order_id
+    to_order_id_lookup.action_type ← action_type
+
+    // Forward price/side/qty info to Price 1v1 Manager block
+    to_price_1v1_mgr.side ← side
+    to_price_1v1_mgr.price ← price
+    to_price_1v1_mgr.quantity ← quantity
+    to_price_1v1_mgr.action_type ← action_type
+
+  END MODULE
