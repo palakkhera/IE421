@@ -1,8 +1,8 @@
 #include "Queue.hpp"
 #include <cassert>
 
-void test_enqueue_dequeue(queue& q) {
-    q.reset();
+void test_enqueue_dequeue() {
+    Queue q;
     assert(q.enqueue(10));
     assert(q.enqueue(20));
     uint32_t out;
@@ -13,8 +13,8 @@ void test_enqueue_dequeue(queue& q) {
     std::cout << "test_enqueue_dequeue passed\n";
 }
 
-void test_peek(queue& q) {
-    q.reset();
+void test_peek() {
+    Queue q;
     assert(q.enqueue(42));
     uint32_t out;
     assert(q.peek(out));
@@ -24,15 +24,15 @@ void test_peek(queue& q) {
     std::cout << "test_peek passed\n";
 }
 
-void test_empty_dequeue(queue& q) {
-    q.reset();
+void test_empty_dequeue() {
+    Queue q;
     uint32_t out;
     assert(!q.dequeue(out));
     std::cout << "test_empty_dequeue passed\n";
 }
 
-void test_fill_and_empty(queue& q, int count) {
-    q.reset();
+void test_fill_and_empty(int count) {
+    Queue q;
     for (int i = 0; i < count; i++) {
         assert(q.enqueue(i));
     }
@@ -44,8 +44,8 @@ void test_fill_and_empty(queue& q, int count) {
     std::cout << "test_fill_and_empty passed\n";
 }
 
-void test_interleaved_ops(queue& q) {
-    q.reset();
+void test_interleaved_ops() {
+    Queue q;
     uint32_t out;
     assert(q.enqueue(1));
     assert(q.enqueue(2));
@@ -57,13 +57,11 @@ void test_interleaved_ops(queue& q) {
 }
 
 int main() {
-    Queue q;
-
-    test_enqueue_dequeue(q);
-    test_peek(q);
-    test_empty_dequeue(q);
-    test_fill_and_empty(q, 16);
-    test_interleaved_ops(q);
+    test_enqueue_dequeue();
+    test_peek();
+    test_empty_dequeue();
+    test_fill_and_empty(16);
+    test_interleaved_ops();
 
     std::cout << "All tests passed!\n";
     return 0;
