@@ -21,5 +21,6 @@ private:
     void eval_cycle();
 };
 
-
-enum HashTableState { IDLE = 0, SEARCH = 1, DONE = 2 };
+// Edit these in hash_table.v too if any changes are needed.
+enum HashTableState { IDLE = 0, SEARCHING = 1, INSERTING = 2, DONE = 3 };
+enum HashTableOp { NOOP = 0, INSERT = 1, LOOKUP = 2, ERASE = 3 }; 

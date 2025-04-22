@@ -29,23 +29,19 @@ void HashTable::eval_cycle() {
 }
 
 bool HashTable::insert(uint32_t key, void* value) {
-    dut->insert = 1;
-    dut->lookup = 0;
-    dut->erase = 0;
+    dut->op = INSERT;
     dut->key = key;
     dut->value_in = reinterpret_cast<uintptr_t>(value);
 
     eval_cycle();
 
     bool success = dut->success;
-    dut->insert = 0;
+    dut->op = NOOP;
     return success;
 }
 
 bool HashTable::lookup(uint32_t key, void** value_out) {
-    dut->insert = 0;
-    dut->lookup = 1;
-    dut->erase = 0;
+    dut->op = LOOKUP;
     dut->key = key;
 
     eval_cycle();
@@ -55,19 +51,17 @@ bool HashTable::lookup(uint32_t key, void** value_out) {
         *value_out = reinterpret_cast<void*>(dut->value_out);
     }
 
-    dut->lookup = 0;
+    dut->op = NOOP;
     return success;
 }
 
 bool HashTable::erase(uint32_t key) {
-    dut->insert = 0;
-    dut->lookup = 0;
-    dut->erase = 1;
+    dut->op = ERASE;
     dut->key = key;
 
     eval_cycle();
 
     bool success = dut->success;
-    dut->erase = 0;
+    dut->op = NOOP;
     return success;
 }

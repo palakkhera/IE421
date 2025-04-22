@@ -51,8 +51,8 @@ void test_collision() {
     auto* a = new SimpleOrderBookEntry{111, 1};
     auto* b = new SimpleOrderBookEntry{222, 2};
 
-    ht.insert(key1, a);
-    ht.insert(key2, b);
+    assert(ht.insert(key1, a));
+    assert(ht.insert(key2, b));
 
     SimpleOrderBookEntry* out1 = nullptr;
     SimpleOrderBookEntry* out2 = nullptr;

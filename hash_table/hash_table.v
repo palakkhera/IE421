@@ -1,13 +1,39 @@
 /*
-+-----------------------+
-|     hash_table.v      |
-+-----------------------+
-| - buckets[0..N-1]     |  -->  index = hash(key)
-|                       |        ↓
-| - entry_pool[0..M-1]  |  -> linked list:
-|                       |     [entry0] -> [entry5] -> ...
-| - freelist management |
-+-----------------------+
+-------------------------------------------------------------------------------
+  Verilog Hash Table with Separate Chaining and Freelist-Based Allocation
+-------------------------------------------------------------------------------
+
+  This module implements a parameterized hash table with separate chaining
+  for collision resolution. Each bucket contains a linked list of entries
+  stored in a flat memory pool. A simple freelist allocator is used to
+  manage dynamic allocation and deallocation of entries in the pool.
+
+  Features:
+    - Fixed-size hash table with TABLE_SIZE buckets
+    - Separate chaining via singly linked lists
+    - Custom key and value widths (KEY_WIDTH, VALUE_WIDTH)
+    - Entry pool of size POOL_SIZE with explicit memory reuse
+    - LRU-style freelist management for reusing deleted entries
+    - Finite state machine (FSM) to process insert, lookup, and erase ops
+
+  Interface:
+    Inputs:
+      clk       - clock signal
+      rst       - synchronous reset
+      key       - input key
+      value_in  - value associated with key (for insert)
+      op        - operation request signal (0 == noop, 1 == insert, 2 == lookup, 3 == erase)
+
+    Outputs:
+      value_out - value returned during lookup or erase
+      success   - operation success flag
+      state     - current FSM state (IDLE, SEARCHING, INSERTING, DONE)
+
+  Notes:
+    - Keys are hashed using the low bits of the key.
+    - All operations are pipelined and handled across multiple clock cycles.
+    - User must wait for state == DONE before issuing a new request.
+-------------------------------------------------------------------------------
 */
 
 // Chained hash table with separate chaining and simple freelist allocator
@@ -23,14 +49,15 @@ module hash_table #(
 
     input      [KEY_WIDTH-1:0]   key,
     input      [VALUE_WIDTH-1:0] value_in,
-    input                        insert,
-    input                        lookup,
-    input                        erase,
+    input  reg [1:0]             op,
     output reg [VALUE_WIDTH-1:0] value_out,
     output reg                   success,
     output reg [1:0]             state
 );
-    localparam IDLE = 0, SEARCH = 1, DONE = 2;
+    // Edit these in HashTable.hpp too if any changes are needed.
+    localparam IDLE = 0, SEARCHING = 1, INSERTING = 2, DONE = 3; // state
+    localparam NOOP = 0, INSERT = 1, LOOKUP = 2, ERASE = 3; // operation
+
     localparam NULL = 32'hFFFF_FFFF;
 
     // Hash table bucket array (head pointer for each bucket)
@@ -58,7 +85,7 @@ module hash_table #(
         for (i = 0; i < TABLE_SIZE; i = i + 1) buckets[i] = NULL;
         for (i = 0; i < POOL_SIZE; i = i + 1) freelist_next[i] = i + 1;
         freelist_next[POOL_SIZE-1] = NULL;
-        freelist_head = 1; // 0 should work here but there is a bug
+        freelist_head = 0;
     end
 
     always @(posedge clk) begin
@@ -69,82 +96,83 @@ module hash_table #(
         end else begin
             success   <= 0;
             value_out <= 0;
-
             case (state)
                 IDLE: begin
-                    if (insert) begin
-                        if (freelist_head != NULL) begin
-                            curr <= freelist_head;
-                            freelist_head <= freelist_next[curr];
+                    curr <= buckets[index];
+                    prev <= NULL;
+                    if (op == NOOP) begin
+                        state <= DONE;
+                    end else begin
+                        state <= SEARCHING;
+                    end;
+                end // IDLE
 
-                            pool_key[curr]   <= key;
-                            pool_value[curr] <= value_in;
-                            pool_next[curr]  <= buckets[index];
-
-                            buckets[index] <= curr;
-
-                            $display("after insert\nbuckets[index]");
-                            $display(buckets[index]);
-                            $display("curr");
-                            $display(curr);
-                            $display("freelist_head");
-                            $display(freelist_head);
-                            $display("freelist_next[curr]");
-                            $display(freelist_next[curr]);
-                            $display("pool_next[curr]");
-                            $display(pool_next[curr]);
-                            $display("index");
-                            $display(index);
-                            $display("----------");
-
-                            value_out <= value_in;
-                            success   <= 1;
-                            state     <= DONE;
-                        end else begin
-                            success <= 0;
-                            state   <= DONE;
-                        end
-                    end else if (lookup || erase) begin
-                        curr <= buckets[index];
-                        prev <= NULL;
-                        state <= SEARCH;
-                    end
-                end
-
-                SEARCH: begin
-                    
-                    $display("----\n", curr, pool_next[curr], "\n----");
-                    
+                SEARCHING: begin
                     if (curr != NULL) begin
                         if (pool_key[curr] == key) begin
-                            value_out <= pool_value[curr];
-                            success   <= 1;
-                            if (erase) begin
-                                // Remove from chain
-                                if (prev == NULL) begin
-                                    $display("removing " , curr , " to " , pool_next[curr], "(prev=null)");
-                                    buckets[index] <= pool_next[curr];
-                                end else begin
-                                    $display("removing " , curr , " to " , pool_next[curr]);
-                                    pool_next[prev] <= pool_next[curr];
-                                end
-                                // Add to freelist
-                                freelist_next[curr] <= freelist_head;
-                                freelist_head <= curr;
-                            end
-                            state <= DONE;
+                            case (op)
+                                ERASE: begin
+                                    // Remove from chain
+                                    if (prev == NULL) begin
+                                        buckets[index] <= pool_next[curr];
+                                    end else begin
+                                        pool_next[prev] <= pool_next[curr];
+                                    end
+                                    // Add to freelist
+                                    freelist_next[curr] <= freelist_head;
+                                    freelist_head <= curr; 
+                                    value_out <= pool_value[curr];
+                                    state     <= DONE;
+                                    success   <= 1;
+                                end // ERASE
+                                INSERT: begin
+                                    pool_value[curr] <= value_in;
+                                    value_out <= pool_value[curr];
+                                    state     <= DONE;
+                                    success   <= 1;
+                                end // INSERT
+                                LOOKUP: begin
+                                    value_out <= pool_value[curr];
+                                    state     <= DONE;
+                                    success   <= 1;
+                                end // LOOKUP
+                            endcase;
                         end else begin
                             prev <= curr;
                             curr <= pool_next[curr];
                         end
                     end else begin
-                        state <= DONE;
+                        if (op == INSERT) begin
+                            state <= INSERTING;
+                        end else begin
+                            state <= DONE; 
+                        end
                     end
-                end
+                end // SEARCHING
+
+                INSERTING: begin
+                    if (freelist_head != NULL) begin
+                        // curr <= freelist_head;
+                        freelist_head <= freelist_next[freelist_head];
+
+                        pool_key[freelist_head]   <= key;
+                        pool_value[freelist_head] <= value_in;
+                        pool_next[freelist_head]  <= buckets[index];
+
+                        buckets[index] <= freelist_head;
+
+                        value_out <= value_in;
+                        success   <= 1;
+                        state     <= DONE;
+                    end else begin
+                        success <= 0;
+                        state   <= DONE;
+                    end
+                end // INSERTING
 
                 DONE: begin
                     state <= IDLE;
-                end
+                end // DONE
             endcase
         end
     end
