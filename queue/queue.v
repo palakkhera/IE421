@@ -149,4 +149,3 @@ module queue #(
     assign error_rem    = error_r;
     assign error_time   = error_t;
 endmodule
-    
