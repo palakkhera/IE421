@@ -1,167 +1,151 @@
 module orderbook #(
-  parameter DATA_SIZE    = 64,
-  parameter FIFO_SIZE    = 64,
-  parameter PTR_WIDTH    = $clog2(FIFO_SIZE),
-  parameter PRICE_LEVELS = 256,
-  parameter PRICE_WIDTH  = $clog2(PRICE_LEVELS),
-  parameter MAX_QUEUES   = 512,
-  parameter QID_WIDTH    = $clog2(MAX_QUEUES),
-  parameter MAX_PER_PL   = 8         // max queues you’ll ever attach per price
+	parameter DATA_SIZE    = 64,
+	parameter FIFO_SIZE    = 64,
+	parameter PTR_WIDTH    = $clog2(FIFO_SIZE),
+	parameter PRICE_LEVELS = 256,
+	parameter PRICE_WIDTH  = $clog2(PRICE_LEVELS),
+	parameter MAX_QUEUES   = 1024,
+	parameter PTR_QUEUE    = $clog2(MAX_QUEUES),
 )(
-  input  logic                   clk,
-  input  logic                   reset,
+	input  logic                   clk,
+	input  logic                   reset,
 
-  // 00=add,01=match,10=remove,11=modify
-  input  logic [1:0]             ob_op,
-  input  logic                   side,   // 0=bid,1=ask
-  input  logic [PRICE_WIDTH-1:0] price,
-  input  logic [PTR_WIDTH-1:0]   ob_index,
-  input  logic [DATA_SIZE-1:0]   ob_data,
+	// 00=add,01=match,10=remove,11=modify
+	input  logic [1:0]             op_flag,
+	input  logic                   side,   // 0=bid,1=ask
+	input  logic [PRICE_WIDTH-1:0] price,
+	input  logic [PTR_QUEUE-1:0]   op_q_index,
+	input  logic [PTR_WIDTH-1:0]   op_index,
+	input  logic [DATA_SIZE-1:0]   op_data,
 
-  // match pops one per cycle
-  output logic [DATA_SIZE-1:0]   ob_pop_data,
-  output logic                   matching_in_progress
+	// match pops one per cycle
+	output logic [DATA_SIZE-1:0]   ob_pop_data,
+	output logic                   error_match // matching in progress
 );
+	// use a linked list to store the head and tail pointer of each price level.
+	// also include both sides: bids and asks.
 
-  // —— book tables —— 
-  // for each side+price: list of active queue‐IDs, and a count
-  logic [QID_WIDTH-1:0] pl_q  [0:1][0:PRICE_LEVELS-1][0:MAX_PER_PL-1];
-  logic [$clog2(MAX_PER_PL+1)-1:0]  pl_cnt [0:1][0:PRICE_LEVELS-1];
+	logic [PTR_QUEUE-1:0]          	bids_head[0:PRICE_LEVELS-1];
+	logic [PTR_QUEUE-1:0]          	asks_head[0:PRICE_LEVELS-1];
 
-  // —— instantiate the pool —— 
-  logic                   alloc_req, alloc_ack;
-  logic [QID_WIDTH-1:0]   alloc_qid;
-  logic                   free_req;
-  logic [QID_WIDTH-1:0]   free_qid;
+	logic [PTR_QUEUE-1:0]          	bids_tail[0:PRICE_LEVELS-1];
+	logic [PTR_QUEUE-1:0]          	asks_tail[0:PRICE_LEVELS-1];
 
-  logic                   op_valid;
-  logic [QID_WIDTH-1:0]   op_qid;
-  logic [1:0]             op_flag;
-  logic [PTR_WIDTH-1:0]   op_index;
-  logic [DATA_SIZE-1:0]   op_data;
-  logic                   full, empty;
-  logic [PTR_WIDTH:0]     size;
-  logic [DATA_SIZE-1:0]   pop_data;
+	// a free list of unused queue IDs.
+	logic [PTR_QUEUE-1:0]		   	free_head;
+	logic [PTR_QUEUE-1:0]			free_tail;
+	logic [PTR_QUEUE-1:0]			free_next[MAX_QUEUES];
 
-  queue_pool #(
-    .DATA_SIZE (DATA_SIZE),
-    .FIFO_SIZE (FIFO_SIZE),
-    .PTR_WIDTH (PTR_WIDTH),
-    .MAX_QUEUES(MAX_QUEUES),
-    .QID_WIDTH (QID_WIDTH)
-  ) pool (
-    .clk         (clk),
-    .reset       (reset),
-    // alloc/free
-    .alloc_req   (alloc_req),
-    .alloc_ack   (alloc_ack),
-    .alloc_qid   (alloc_qid),
-    .free_req    (free_req),
-    .free_qid    (free_qid),
-    // op iface
-    .op_valid    (op_valid),
-    .op_qid      (op_qid),
-    .op_flag     (op_flag),
-    .op_index    (op_index),
-    .op_data     (op_data),
-    .pop_data    (pop_data),
-    .full        (full),
-    .empty       (empty),
-    .size        (size),
-    .err_reg     (),
-    .err_rem     (),
-    .err_time    ()
-  );
+	// “next” pointer for each allocated queue in its price chain
+  	logic [PTR_QUEUE-1:0] 			next_queue [MAX_QUEUES];
 
-  // —— state for matching —— 
-  typedef enum logic { IDLE, MATCHING } st_t;
-  st_t       state, nxt;
-  logic      start_m;
-  logic [PRICE_WIDTH-1:0]  match_price;
-  logic [$clog2(MAX_PER_PL)-1:0] match_slot;
-  logic      match_side;
+	logic [MAX_QUEUES-1:0][1:0]            op_flag_i;
+	logic [MAX_QUEUES-1:0][PTR_WIDTH-1:0]  op_index_i;
+	logic [MAX_QUEUES-1:0][DATA_SIZE-1:0]  op_data_i;
+  	logic [MAX_QUEUES-1:0]                 op_valid_i;
 
-  assign start_m = (state==IDLE && ob_op==2'b01);
+	logic [MAX_QUEUES-1:0][DATA_SIZE-1:0]  pop_data_i;
+	logic [MAX_QUEUES-1:0]                 full_i, empty_i, error_reg_i, error_rem_i, error_time_i;
+	logic [MAX_QUEUES-1:0][PTR_WIDTH:0]    size_i;
 
-  //— FSM — 
-  always_comb begin
-    nxt = state;
-    unique case (state)
-      IDLE:     if (start_m)                    nxt = MATCHING;
-      MATCHING: if ( /* no queues left on match_side */ ) nxt = IDLE;
-    endcase
-  end
-  always_ff @(posedge clk or posedge reset) begin
-    if (reset) begin state<=IDLE; match_side<=0; end
-    else begin
-      if (start_m)     match_side <= side;
-      state            <= nxt;
-    end
-  end
+	generate
+		for (int j = 0; j < MAX_QUEUES; j++) begin: QUEUES
+			queue # (
+				.DATA_SIZE(DATA_SIZE),
+				.FIFO_SIZE(FIFO_SIZE),
+				.SCAN_SIZE(16)
+			) u_queue (
+				.clk 	(clk),
+				.reset	(reset),
 
-  //—— dynamic allocation on ADD ——
-  always_ff @(posedge clk) begin
-    alloc_req <= 0;
-    if (state==IDLE && ob_op==2'b00) begin
-      // need to push to one of pl_q[side][price][0..cnt-1]
-      if (pl_cnt[side][price]==0 
-          || full /* last queue is full */ ) begin
-        // grab a fresh context
-        alloc_req <= 1;
-      end
-    end
+				.op_flag     (op_flag_i[j]),
+				.op_index    (op_index_i[j]),
+				.op_data     (op_data_i[j]),
+        		.op_valid    (op_valid_i[j]),
+				.pop_data    (pop_data_i[j]),
+				.full        (full_i[j]),
+				.empty       (empty_i[j]),
+				.size        (size_i[j]),
+				.error_reg   (error_reg_i[j]),
+				.error_rem   (error_rem_i[j]),
+				.error_time  (error_time_i[j])
+			);
+		end
+	endgenerate
 
-    if (alloc_ack) begin
-      // append new queue‐ID
-      pl_q[side][price][ pl_cnt[side][price] ] <= alloc_qid;
-      pl_cnt[side][price] <= pl_cnt[side][price] + 1;
-    end
-  end
+	// In this implementation a Queue ID = 0 means nullptr. 
+	
+	always_ff @(posedge clk or posedge reset) begin
+		if (reset) begin
+			free_head = 1;
+			for (int i = 1; i < MAX_QUEUES-1; i++) begin
+				free_next[i] <= i+1;
+			end
+			free_next[MAX_QUEUES-1] <= 0;  
+			free_tail <= MAX_QUEUES-1;
 
-  //—— build op interface each cycle ——
-  always_comb begin
-    op_valid = 0;
-    alloc_qid; free_req <= 0; // default
+			for (int i = 0; i < PRICE_LEVELS; i++) begin
+				bids_head[i] <= 0;
+				bids_tail[i] <= 0;
+				asks_head[i] <= 0;
+				asks_tail[i] <= 0;
+			end
+    	end
+  	end
 
-    if (state==IDLE) begin
-      case (ob_op)
-        2'b00: begin  // ADD
-          // choose last queue‐ID
-          op_qid   = pl_q[side][price][ pl_cnt[side][price]-1 ];
-          op_flag  = ob_op;
-          op_data  = ob_data;
-          op_valid = 1;
-        end
-        2'b10,2'b11: begin  // remove/modify
-          // you need to track which queue‐ID your index refers to;
-          // for simplicity assume ob_index is encoded {slot,idx}
-          op_qid   = pl_q[side][price][ ob_index[PTR_WIDTH +: $clog2(MAX_PER_PL)] ];
-          op_flag  = ob_op;
-          op_index = ob_index[PTR_WIDTH-1:0];
-          op_valid = 1;
-        end
-        default: ;
-      endcase
-    end
-    else if (state==MATCHING) begin
-      // pick next nonempty queue in price
-      // (scan through pl_q[match_side][match_price][0..cnt-1])
-      // set match_price,match_slot here
-      // then:
-      op_qid   = pl_q[match_side][match_price][match_slot];
-      op_flag  = 2'b01;    // pop
-      op_valid = 1;
-      // when that queue empties, free it:
-      if ( /* empty soon */ ) begin
-        free_req <= 1;
-        free_qid <= op_qid;
-        // remove it from pl_q list, decrement pl_cnt...
-      end
-    end
-  end
+	logic [PTR_QUEUE-1:0] nqueue;
+	always_comb begin
+		op_valid_i = '0;                      
+		op_flag_i  = '{default: 2'b00};       
+		op_index_i = '{default: '0};           
+		op_data_i  = '{default: '0};  
+		nqueue 	   = 0;
+		case (op_flag)
+			2'b00: begin
+				logic [PTR_QUEUE-1:0] price_tail = (side) ? (asks_tail[price]) : (bids_tail[price]);
+				logic [PTR_QUEUE-1:0] price_head = (side) ? (asks_head[price]) : (bids_head[price]);
 
-  // finally hook pool’s pop_data out
-  assign ob_pop_data = pop_data;
-  assign matching_in_progress = (state==MATCHING);
+				if (price_head == PTR_QUEUE'(0) || full_i[price_tail]) begin //empty pricelevel
+					nqueue = free_head;
+					free_head = free_next[nqueue];
+					if (free_head == PTR_QUEUE'(0)) free_tail = PTR_QUEUE'(0); // all used? should not happen. TODO: Set error flags.
+
+					if (price_head == PTR_QUEUE'(0)) begin
+						if (side) begin
+							asks_head[price] = nqueue;
+							asks_tail[price] = nqueue;
+						end else begin
+							bids_head[price] = nqueue;
+							bids_tail[price] = nqueue;
+						end
+					end else begin
+						next_queue[price_tail]   	= nqueue;	
+						if (side) begin
+							asks_tail[price]    = nqueue;
+						end else begin
+							bids_tail[price]    = nqueue;
+						end
+					end
+					next_queue[nqueue]  = PTR_QUEUE'(0);
+				end else begin
+					nqueue = price_tail;
+				end
+
+				op_valid_i[nqueue]  = 1;
+				op_flag_i[nqueue]   = 2'b00;
+				op_index_i[nqueue]  = 0;//We don't care about index when ADD.
+				op_data_i[nqueue]   = op_data;
+			end
+
+			2'b10, 2'b11: begin
+				op_valid_i[op_q_index] = 1;
+				op_flag_i[op_q_index]  = op_flag;
+				op_index_i[op_q_index] = op_index;
+				op_data_i[op_q_index]  = op_data;
+			end
+
+			// TODO: Matching
+		endcase        
+	end
 
 endmodule

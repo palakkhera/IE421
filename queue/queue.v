@@ -11,6 +11,7 @@ module queue #(
     input logic [1:0]               op_flag, // 00=push, 01=pop, 10=remove, 11=modify
     input logic [PTR_WIDTH-1:0]     op_index,
     input logic [DATA_SIZE-1:0]     op_data,
+    input logic                     op_valid,
 
     output logic [DATA_SIZE-1:0]    pop_data,
 
@@ -55,27 +56,34 @@ module queue #(
     endfunction
 
     always_comb begin //All the modulos are ignored because of the "truncating" feature. Careful when editing!
-        is_push     = (op_flag == 2'b00) && (counter < FIFO_SIZE);
-        is_pop      = (op_flag == 2'b01) && (real_counter > 0);
-        is_remove   = (op_flag == 2'b10) && (valid[op_index]);
-        is_modify   = (op_flag == 2'b11) && (valid[op_index]);
-        
-        tail_next   = tail + is_push;
-        head_next   = head + is_pop;
+        if (!op_valid) begin
+            head_next         = head;
+            tail_next         = tail;
+            real_counter_next = real_counter;
+            is_push = is_pop = is_remove = is_modify = 1'b0;
+        end else begin
+            is_push     = (op_flag == 2'b00) && (counter < FIFO_SIZE);
+            is_pop      = (op_flag == 2'b01) && (real_counter > 0);
+            is_remove   = (op_flag == 2'b10) && (valid[op_index]);
+            is_modify   = (op_flag == 2'b11) && (valid[op_index]);
+            
+            tail_next   = tail + is_push;
+            head_next   = head + is_pop;
 
-        for (int i = 0; i < SCAN_SIZE; i++) begin
-            chunk[i] = valid[(head_next + i) & (FIFO_SIZE - 1)];
+            for (int i = 0; i < SCAN_SIZE; i++) begin
+                chunk[i] = valid[(head_next + i) & (FIFO_SIZE - 1)];
+            end
+            offset = priority16(chunk);
+
+            available = {1'b0, tail} - {1'b0, head_next};
+            if (offset > available) begin
+                offset = available;
+            end
+
+            head_next = head_next + offset;
+
+            real_counter_next = real_counter + is_push - is_pop - is_remove; //It should be undefined behavior to have both is_pop && is_remove = 1;
         end
-        offset = priority16(chunk);
-
-        available = {1'b0, tail} - {1'b0, head_next};
-        if (offset > available) begin
-            offset = available;
-        end
-
-        head_next = head_next + offset;
-
-        real_counter_next = real_counter + is_push - is_pop - is_remove; //It should be undefined behavior to have both is_pop && is_remove = 1;
     end
 
     always_ff @(posedge clk or posedge reset) begin
@@ -92,51 +100,54 @@ module queue #(
             //     memory[i]   <= 0;
             // end (Maybe reset the memory when the queue is recycled?)
         end else begin
-            // --- push ---
-            if (op_flag == 2'b00) begin 
-                if (counter < FIFO_SIZE) begin
-                    memory[tail]    <= op_data;
-                    valid[tail]     <= 1;
-                    error_g         <= 0;
-                end else begin 
-                    error_g         <= 1;
-                end
-            end
 
-            // --- pop ---
-            if (op_flag == 2'b01) begin
-                if (real_counter > 0) begin
-                    if (!valid[head]) begin
-                        error_t     <= 1;
+            if (op_valid) begin
+            // --- push ---
+                if (op_flag == 2'b00) begin 
+                    if (counter < FIFO_SIZE) begin
+                        memory[tail]    <= op_data;
+                        valid[tail]     <= 1;
+                        error_g         <= 0;
+                    end else begin 
+                        error_g         <= 1;
+                    end
+                end
+
+                // --- pop ---
+                if (op_flag == 2'b01) begin
+                    if (real_counter > 0) begin
+                        if (!valid[head]) begin
+                            error_t     <= 1;
+                        end else begin
+                            valid[head] <= 0;
+                            error_t     <= 0;
+                        end
                     end else begin
-                        valid[head] <= 0;
-                        error_t     <= 0;
+                        error_g         <= 1; 
+                    end
+                end
+                
+                // --- remove & modify ---
+                if (op_flag == 2'b10 || op_flag == 2'b11) begin
+                    if (valid[op_index]) begin
+                        if (op_flag == 2'b10) begin
+                            valid[op_index]     <= 0;
+                        end else begin
+                            memory[op_index]    <= op_data;
+                        end
+                        error_r                 <= 0;
+                    end else begin 
+                        error_r                 <= 1;
                     end
                 end else begin
-                    error_g         <= 1; 
+                    error_r                     <= 0;    
                 end
-            end
-            
-            // --- remove & modify ---
-            if (op_flag == 2'b10 || op_flag == 2'b11) begin
-                if (valid[op_index]) begin
-                    if (op_flag == 2'b10) begin
-                        valid[op_index]     <= 0;
-                    end else begin
-                        memory[op_index]    <= op_data;
-                    end
-                    error_r                 <= 0;
-                end else begin 
-                    error_r                 <= 1;
-                end
-            end else begin
-                error_r                     <= 0;    
-            end
 
-            head            <= head_next;
-            tail            <= tail_next;
-            counter         <= {1'b0, tail} - {1'b0, head}; 
-            real_counter    <= real_counter_next;  
+                head            <= head_next;
+                tail            <= tail_next;
+                counter         <= {1'b0, tail} - {1'b0, head}; 
+                real_counter    <= real_counter_next;  
+            end
         end
     end
 
