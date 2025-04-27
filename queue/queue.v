@@ -84,7 +84,7 @@ module queue #(
             head_index <= 0;
             tail_index <= 0;
             size       <= 0;
-            state      <= IDLE;
+            state      <= DONE;
         end else begin
             case (state)
                 IDLE: begin

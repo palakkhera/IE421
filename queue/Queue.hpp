@@ -6,14 +6,18 @@
 #include "Vqueue.h"
 #include "verilated.h"
 
+
+// Edit these in queue.v too if any changes are needed.
+constexpr uint32_t QUEUE_CAPACITY = 65536;
+enum QueueState { IDLE = 0, BUSY = 1, FLUSHING = 2, DONE = 3 }; // state
+enum QueueOp { NOOP = 0, PUSH = 1, POP = 2, PEEK = 3, REMOVE = 4, MODIFY = 5 }; // operation
+
 class Queue {
 public:
     Queue();
     ~Queue();
 
     void reset();
-
-    void step();
 
     // Push a new element into the queue
     bool push(uint64_t data);
@@ -41,9 +45,10 @@ public:
 
 private:
     Vqueue* dut;
-};
 
-// Edit these in queue.v too if any changes are needed.
-constexpr uint32_t QUEUE_CAPACITY = 65536;
-enum QueueState { IDLE = 0, BUSY = 1, FLUSHING = 2, DONE = 3 }; // state
-enum QueueOp { NOOP = 0, PUSH = 1, POP = 2, PEEK = 3, REMOVE = 4, MODIFY = 5 }; // operation
+    // Advances until state reaches DONE
+    void step();
+
+    // Advances one clock cycle
+    void eval_cycle();
+};

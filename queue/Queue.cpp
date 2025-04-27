@@ -17,6 +17,12 @@ void Queue::reset() {
 }
 
 void Queue::step() {
+    do {
+        eval_cycle();
+    } while (dut->state != DONE);
+}
+
+void Queue::eval_cycle() {
     dut->clk = 0;
     dut->eval();
     Verilated::timeInc(1);
