@@ -1,0 +1,27 @@
+For order book logic:
+********************
+
+INPUT: HASH_MAP module will give you the pricelevel & # of FIFO & the index of order data in that FIFO
+
+
+if operation = ADD
+    find the pricelevel of the order
+    call that PRICELEVEL module to add the order;
+    run the MATCHING module;
+else if operation = MODIFY
+    if price of the order is changed: always remove & add
+    else if quantity is larger: remove & add;
+    else (the quantity is smaller): call the top-level controller to find the pricelevel and adjust the quantity. 
+
+    if HASH_MAP does not find it: set the error flag and do nothing
+
+
+    remove: CALL the top-level controller to REMOVE the order in that location
+
+    add: do the same for ADD;
+
+else if operation = CANCEL
+
+    if HASH_MAP does not find it: set the error flag and do nothing
+
+    remove: CALL the top-level controller to REMOVE the order in that location
