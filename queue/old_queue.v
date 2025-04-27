@@ -8,7 +8,7 @@ module queue #(
     input logic                     clk,
     input logic                     reset,
 
-    input logic [1:0]               op_flag, // 00=push, 01=pop, 10=remove, 11=modify
+    input logic [2:0]               op_flag, // 000=idle, 100=push, 101=pop, 110=remove, 111=modify
     input logic [PTR_WIDTH-1:0]     op_index,
     input logic [DATA_SIZE-1:0]     op_data,
 
@@ -75,7 +75,7 @@ module queue #(
 
         head_next = head_next + offset;
 
-        real_counter_next = real_counter + is_push - is_pop - is_remove; //It should be undefined behavior to have both is_pop && is_remove = 1;
+        real_counter_next = real_counter + is_push - is_pop - is_remove; 
     end
 
     always_ff @(posedge clk or posedge reset) begin
