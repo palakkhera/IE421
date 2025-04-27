@@ -14,6 +14,7 @@
     FN = N;                                                         \
   endfunction
 
+//TODO: Refactor the comb logics into 2 stages: one for all priority encode, next pointers, 
 module orderbook #(
 	parameter DATA_SIZE    = 64,
 	parameter FIFO_SIZE    = 64,
@@ -76,6 +77,17 @@ module orderbook #(
 	logic [PRICE_LEVELS-1:0] 	bid_active, 	ask_active;
 	logic 						bid_empty,      ask_empty;
 
+	logic [PTR_QUEUE-1:0]          	next_bids_head;
+	logic [PTR_QUEUE-1:0]          	next_bids_tail;
+	logic [PTR_QUEUE-1:0]          	next_asks_head;
+	logic [PTR_QUEUE-1:0]          	next_asks_tail;
+	logic 							next_bid_active;
+	logic							next_ask_active;
+	
+	logic [PTR_QUEUE-1:0]			next_free_next_first;
+	logic [PTR_QUEUE-1:0]			next_free_next_second;
+	logic [PTR_QUEUE-1:0]			next_free_tail;
+
 	generate
 		for (int j = 0; j < MAX_QUEUES; j++) begin: QUEUES
 			queue # (
@@ -129,17 +141,27 @@ module orderbook #(
 		end else begin 
 			ask_empty = 1;
 		end
+		next_bids_head = bids_head[best_bid];
+		next_bids_tail = bids_tail[best_bid];
+		next_asks_head = asks_head[best_ask];
+		next_asks_tail = asks_tail[best_ask];
+		next_bid_active = bid_active[best_bid];
+		next_ask_active = bid_active[best_ask];
 	end
 
 	// In this implementation a Queue ID = 0 means nullptr. 
 	
 	logic [PTR_QUEUE-1:0] nqueue;
+	logic				  is_matching;
 
 	always_comb begin             
 		op_flag_i  = '{default: 3'b000};       
 		op_index_i = '{default: '0};           
 		op_data_i  = '{default: '0};  
 		nqueue 	   = 0;
+		next_free_next = free_next[free_tail];
+		next_free_tail = free_tail;
+		is_matching = 0;
 		case (op_flag)
 			3'b100: begin
 				logic [PTR_QUEUE-1:0] price_tail = (side) ? (asks_tail[price]) : (bids_tail[price]);
@@ -165,43 +187,67 @@ module orderbook #(
 			3'b101: begin // Matching
 				if (!ask_empty && !bid_empty && best_ask < best_bid) begin // The orderbook should be fully matched before next matching happens.
 					// We assume the 16-31th bits are "quantity" field.
+					is_matching = 1;
 					logic [PTR_QUEUE-1:0] bid_queue_ptr = bids_head[best_bid];
 					logic [PTR_QUEUE-1:0] ask_queue_ptr = asks_head[best_ask];
+					logic [PTR_WIDTH-1:0] bid_queue_size = size_i[bid_queue_ptr];
+					logic [PTR_WIDTH-1:0] ask_queue_size = size_i[ask_queue_ptr];
 
-					logic [DATA_SIZE-1:0] bid_word = pop_data_i[bid_queue_ptr];
-					logic [DATA_SIZE-1:0] ask_word = pop_data_i[ask_queue_ptr];
+					if (!error_time_i[bid_queue_ptr] && !error_time_i[ask_queue_ptr] && bid_queue_size && ask_queue_size) begin
 
-					logic [15:0] bid_qty = bid_word[31:16];
-					logic [15:0] ask_qty = ask_word[31:16];
-					logic [15:0] trade_qty = (bid_qty < ask_qty) ? bid_qty : ask_qty;
+						logic [DATA_SIZE-1:0] bid_word = pop_data_i[bid_queue_ptr];
+						logic [DATA_SIZE-1:0] ask_word = pop_data_i[ask_queue_ptr];
 
-					logic [15:0] bid_rem = bid_qty - trade_qty;
-					logic [15:0] ask_rem = ask_qty - trade_qty;
+						logic [15:0] bid_qty = bid_word[31:16];
+						logic [15:0] ask_qty = ask_word[31:16];
+						logic [15:0] trade_qty = (bid_qty < ask_qty) ? bid_qty : ask_qty;
 
-					logic [DATA_SIZE-1:0] new_bid_data = { bid_word[63:32], bid_rem, bid_word[15:0] };
-					logic [DATA_SIZE-1:0] new_ask_data = { ask_word[63:32], ask_rem, ask_word[15:0] };
+						logic [15:0] bid_rem = bid_qty - trade_qty;
+						logic [15:0] ask_rem = ask_qty - trade_qty;
 
-					if (bid_rem == 0) begin
-						op_flag_i[bid_queue_ptr]  = 3'b101;             // pop
-						op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
-					end else begin
-						op_flag_i[bid_queue_ptr]  = 3'b111;             // modify
-						op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
-						op_data_i[bid_queue_ptr]  = new_bid_data;
-					end
+						logic [DATA_SIZE-1:0] new_bid_data = { bid_word[63:32], bid_rem, bid_word[15:0] };
+						logic [DATA_SIZE-1:0] new_ask_data = { ask_word[63:32], ask_rem, ask_word[15:0] };
 
-					if (ask_rem == 0) begin
-						op_flag_i[ask_queue_ptr]  = 3'b101;             
-						op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
-					end else begin
-						op_flag_i[ask_queue_ptr]  = 3'b111;             
-						op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
-						op_data_i[ask_queue_ptr]  = new_ask_data;
+						if (bid_rem == 0) begin
+							op_flag_i[bid_queue_ptr]  = 3'b101;             // pop
+							op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
+							bid_queue_size -= 1;
+						end else begin
+							op_flag_i[bid_queue_ptr]  = 3'b111;             // modify
+							op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
+							op_data_i[bid_queue_ptr]  = new_bid_data;
+						end
+
+						if (ask_rem == 0) begin
+							op_flag_i[ask_queue_ptr]  = 3'b101;             
+							op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
+							ask_queue_size -= 1;
+						end else begin
+							op_flag_i[ask_queue_ptr]  = 3'b111;             
+							op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
+							op_data_i[ask_queue_ptr]  = new_ask_data;
+						end
+					end 
+					if (bid_queue_size == 0) begin
+						logic [PTR_QUEUE-1:0] bid_next_queue = next_queue[bid_queue_ptr];
+						if (bid_next_queue == '0) begin
+							next_bids_tail = '0;
+							next_bid_active = '0;
+						end
+						next_bids_head = bid_next_queue;
+						next_free_next = bid_queue_ptr;
+						next_free_tail = bid_queue_ptr;
+					end else if (ask_queue_size == 0) begin
+						logic [PTR_QUEUE-1:0] ask_next_queue = next_queue[ask_queue_ptr];
+						if (ask_next_queue == '0) begin
+							next_asks_tail = '0;
+							next_ask_active = '0;
+						end
+						next_asks_head = ask_next_queue;
+						next_free_next = ask_queue_ptr;
+						next_free_tail = ask_queue_ptr;
 					end
 					// TODO : need to call the hashmap to remove the entry when done.
-					// TODO : remove the entire queue block when empty and set the free list accordingly. Also reset the queue block (refactor the reset code).
-					// TODO : waiting queue handling: when error_t is nonzero we should wait until this is done.
-					// TODO : edge case: maybe a queue is empty when we are trying  
 				end
 			end
 		endcase        
@@ -211,7 +257,7 @@ module orderbook #(
 		if (reset) begin
 			bid_active <= 0;
     		ask_active <= 0;
-			free_head = 1;
+			free_head <= 1;
 			for (int i = 1; i < MAX_QUEUES-1; i++) begin
 				free_next[i] <= i+1;
 			end
@@ -255,18 +301,17 @@ module orderbook #(
 						next_queue[nqueue]  <= '0;
 					end 
 				end
-
-				3'b110: begin
-					if (size_i[op_q_index] == 1) begin // TODO: Should remove the queue from the list. 
-						// if (side) begin
-						// 	ask_active[price] <= 0;
-						// end else begin
-						// 	bid_active[price] <= 0;
-						// end
-					end
-				end
-				// TODO: Matching
-			endcase  
+			endcase
+			bids_head[best_bid] <= next_bids_head;
+			bids_tail[best_bid] <= next_bids_tail;
+			asks_head[best_ask] <= next_asks_head;
+			asks_tail[best_ask] <= next_asks_tail;
+			bid_active[best_bid] <= next_bid_active;
+			ask_active[best_ask] <= next_ask_active;
+			free_next[free_tail] <= next_free_next;
+			free_tail			<= next_free_tail; 
 		end
   	end
+
+	assign matching = is_matching;
 endmodule
