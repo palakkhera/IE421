@@ -2,9 +2,7 @@
 
 HashTable::HashTable() {
     dut = new Vhash_table;
-    dut->rst = 1;
-    tick();
-    dut->rst = 0;
+    reset();
 }
 
 HashTable::~HashTable() {
@@ -12,7 +10,17 @@ HashTable::~HashTable() {
     delete dut;
 }
 
-void HashTable::tick() {
+void HashTable::clear() {
+    reset();
+}
+
+void HashTable::reset() {
+    dut->rst = 1;
+    step();
+    dut->rst = 0;
+}
+
+void HashTable::eval_cycle() {
     dut->clk = 0;
     dut->eval();
     main_time++;
@@ -22,9 +30,9 @@ void HashTable::tick() {
     main_time++;
 }
 
-void HashTable::eval_cycle() {
+void HashTable::step() {
     do {
-        tick();
+        eval_cycle();
     } while (dut->state != DONE);
 }
 
@@ -33,7 +41,7 @@ bool HashTable::insert(uint32_t key, void* value) {
     dut->key = key;
     dut->value_in = reinterpret_cast<uintptr_t>(value);
 
-    eval_cycle();
+    step();
 
     bool success = dut->success;
     dut->op = NOOP;
@@ -44,7 +52,7 @@ bool HashTable::lookup(uint32_t key, void** value_out) {
     dut->op = LOOKUP;
     dut->key = key;
 
-    eval_cycle();
+    step();
 
     bool success = dut->success;
     if (success) {
@@ -59,7 +67,7 @@ bool HashTable::erase(uint32_t key) {
     dut->op = ERASE;
     dut->key = key;
 
-    eval_cycle();
+    step();
 
     bool success = dut->success;
     dut->op = NOOP;

@@ -92,7 +92,7 @@ module hash_table #(
         if (rst) begin 
             success   <= 0;
             value_out <= 0;
-            state     <= IDLE;
+            state     <= DONE;
         end else begin
             success   <= 0;
             value_out <= 0;
