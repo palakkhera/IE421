@@ -37,8 +37,10 @@ module orderbook #(
 	input  logic [DATA_SIZE-1:0]   op_data,
 
 	// match pops one per cycle
-	output logic [DATA_SIZE-1:0]   ob_pop_data,
-	output logic                   error_match // matching in progress
+	//output logic [DATA_SIZE-1:0]   ob_pop_data,
+
+	// Should log the trades somewhere (or not?)
+	output logic                   matching // matching in progress
 );
 	// use a linked list to store the head and tail pointer of each price level.
 	// also include both sides: bids and asks.
@@ -65,6 +67,7 @@ module orderbook #(
 	logic [MAX_QUEUES-1:0][DATA_SIZE-1:0]  pop_data_i;
 	logic [MAX_QUEUES-1:0]                 full_i, empty_i, error_reg_i, error_rem_i, error_time_i;
 	logic [MAX_QUEUES-1:0][PTR_WIDTH:0]    size_i;
+	logic [MAX_QUEUES-1:0][PTR_WIDTH-1:0]  head_ptr_i;
 
 	logic [BIT_SCAN-1:0] 		bid_grp_valid, 	ask_grp_valid;
 	logic [BIT_SCAN_WIDTH:0]  best_bid_grp, 	best_ask_grp;
@@ -86,11 +89,11 @@ module orderbook #(
 				.op_flag     (op_flag_i[j]),
 				.op_index    (op_index_i[j]),
 				.op_data     (op_data_i[j]),
-        		.op_valid    (op_valid_i[j]),
 				.pop_data    (pop_data_i[j]),
 				.full        (full_i[j]),
 				.empty       (empty_i[j]),
 				.size        (size_i[j]),
+				.head_ptr	 (head_ptr_i[j]),
 				.error_reg   (error_reg_i[j]),
 				.error_rem   (error_rem_i[j]),
 				.error_time  (error_time_i[j])
@@ -132,8 +135,7 @@ module orderbook #(
 	
 	logic [PTR_QUEUE-1:0] nqueue;
 
-	always_comb begin
-		op_valid_i = '0;                      
+	always_comb begin             
 		op_flag_i  = '{default: 3'b000};       
 		op_index_i = '{default: '0};           
 		op_data_i  = '{default: '0};  
@@ -149,21 +151,58 @@ module orderbook #(
 					nqueue = price_tail;
 				end
 
-				op_valid_i[nqueue]  = 1;
 				op_flag_i[nqueue]   = 3'b100;
 				op_index_i[nqueue]  = 0;//We don't care about index when ADD.
 				op_data_i[nqueue]   = op_data;
 			end
 
 			3'b110, 3'b111: begin
-				op_valid_i[op_q_index] = 1;
 				op_flag_i[op_q_index]  = op_flag;
 				op_index_i[op_q_index] = op_index;
 				op_data_i[op_q_index]  = op_data;
 			end
 
 			3'b101: begin // Matching
+				if (!ask_empty && !bid_empty && best_ask < best_bid) begin // The orderbook should be fully matched before next matching happens.
+					// We assume the 16-31th bits are "quantity" field.
+					logic [PTR_QUEUE-1:0] bid_queue_ptr = bids_head[best_bid];
+					logic [PTR_QUEUE-1:0] ask_queue_ptr = asks_head[best_ask];
 
+					logic [DATA_SIZE-1:0] bid_word = pop_data_i[bid_queue_ptr];
+					logic [DATA_SIZE-1:0] ask_word = pop_data_i[ask_queue_ptr];
+
+					logic [15:0] bid_qty = bid_word[31:16];
+					logic [15:0] ask_qty = ask_word[31:16];
+					logic [15:0] trade_qty = (bid_qty < ask_qty) ? bid_qty : ask_qty;
+
+					logic [15:0] bid_rem = bid_qty - trade_qty;
+					logic [15:0] ask_rem = ask_qty - trade_qty;
+
+					logic [DATA_SIZE-1:0] new_bid_data = { bid_word[63:32], bid_rem, bid_word[15:0] };
+					logic [DATA_SIZE-1:0] new_ask_data = { ask_word[63:32], ask_rem, ask_word[15:0] };
+
+					if (bid_rem == 0) begin
+						op_flag_i[bid_queue_ptr]  = 3'b101;             // pop
+						op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
+					end else begin
+						op_flag_i[bid_queue_ptr]  = 3'b111;             // modify
+						op_index_i[bid_queue_ptr] = head_ptr_i[bid_queue_ptr];
+						op_data_i[bid_queue_ptr]  = new_bid_data;
+					end
+
+					if (ask_rem == 0) begin
+						op_flag_i[ask_queue_ptr]  = 3'b101;             
+						op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
+					end else begin
+						op_flag_i[ask_queue_ptr]  = 3'b111;             
+						op_index_i[ask_queue_ptr] = head_ptr_i[ask_queue_ptr];
+						op_data_i[ask_queue_ptr]  = new_ask_data;
+					end
+					// TODO : need to call the hashmap to remove the entry when done.
+					// TODO : remove the entire queue block when empty and set the free list accordingly. Also reset the queue block (refactor the reset code).
+					// TODO : waiting queue handling: when error_t is nonzero we should wait until this is done.
+					// TODO : edge case: maybe a queue is empty when we are trying  
+				end
 			end
 		endcase        
 	end
@@ -218,12 +257,12 @@ module orderbook #(
 				end
 
 				3'b110: begin
-					if (size_i[op_q_index] == 1) begin
-						if (side) begin
-							ask_active[price] <= 0;
-						end else begin
-							bid_active[price] <= 0;
-						end
+					if (size_i[op_q_index] == 1) begin // TODO: Should remove the queue from the list. 
+						// if (side) begin
+						// 	ask_active[price] <= 0;
+						// end else begin
+						// 	bid_active[price] <= 0;
+						// end
 					end
 				end
 				// TODO: Matching

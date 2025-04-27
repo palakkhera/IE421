@@ -17,6 +17,7 @@ module queue #(
     output logic                    full,
     output logic                    empty,
     output logic [PTR_WIDTH:0]      size,
+    output logic [PTR_WIDTH-1:0]    head_ptr,
     output logic                    error_reg, // “global” push/pop overflow/underflow
     output logic                    error_rem, // remove/modify invalid
     output logic                    error_time // Not finished scanning for next head yet!
@@ -55,10 +56,10 @@ module queue #(
     endfunction
 
     always_comb begin //All the modulos are ignored because of the "truncating" feature. Careful when editing!
-        is_push     = (op_flag == 2'b00) && (counter < FIFO_SIZE);
-        is_pop      = (op_flag == 2'b01) && (real_counter > 0);
-        is_remove   = (op_flag == 2'b10) && (valid[op_index]);
-        is_modify   = (op_flag == 2'b11) && (valid[op_index]);
+        is_push     = (op_flag == 3'b100) && (counter < FIFO_SIZE);
+        is_pop      = (op_flag == 3'b101) && (real_counter > 0);
+        is_remove   = (op_flag == 3'b110) && (valid[op_index]);
+        is_modify   = (op_flag == 3'b111) && (valid[op_index]);
         
         tail_next   = tail + is_push;
         head_next   = head + is_pop;
@@ -93,7 +94,7 @@ module queue #(
             // end (Maybe reset the memory when the queue is recycled?)
         end else begin
             // --- push ---
-            if (op_flag == 2'b00) begin 
+            if (op_flag == 3'b100) begin 
                 if (counter < FIFO_SIZE) begin
                     memory[tail]    <= op_data;
                     valid[tail]     <= 1;
@@ -104,7 +105,7 @@ module queue #(
             end
 
             // --- pop ---
-            if (op_flag == 2'b01) begin
+            if (op_flag == 3'b101) begin
                 if (real_counter > 0) begin
                     if (!valid[head]) begin
                         error_t     <= 1;
@@ -118,9 +119,9 @@ module queue #(
             end
             
             // --- remove & modify ---
-            if (op_flag == 2'b10 || op_flag == 2'b11) begin
+            if (op_flag == 3'b110 || op_flag == 3'b111) begin
                 if (valid[op_index]) begin
-                    if (op_flag == 2'b10) begin
+                    if (op_flag == 3'b110) begin
                         valid[op_index]     <= 0;
                     end else begin
                         memory[op_index]    <= op_data;
@@ -140,11 +141,12 @@ module queue #(
         end
     end
 
-    assign pop_data     = (op_flag == 2'b01 && valid[head]) ? memory[head] : '0; //Need to check error_time first! Don't assume this is correct!
+    assign pop_data     =  valid[head] ? memory[head] : '0; //Need to check error_time first! Don't assume this is correct!
 
     assign empty        = (real_counter == 0);
     assign full         = (counter == FIFO_SIZE);
     assign size         = real_counter; // This is the real size!
+    assign head_ptr     = head;
     assign error_reg    = error_g;
     assign error_rem    = error_r;
     assign error_time   = error_t;
