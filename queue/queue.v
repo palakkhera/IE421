@@ -1,151 +1,180 @@
+// -----------------------------------------------------------------------------
+// queue.v
+// -----------------------------------------------------------------------------
+// A simple queue data structure implemented in Verilog.
+//
+// Supports the following operations:
+// - PUSH:   Add a new value at the end of the queue.
+// - POP:    Remove and output the first valid value from the queue.
+// - PEEK:   Output the first valid value without removing it.
+// - REMOVE: Remove an element at a specified index.
+// - MODIFY: Modify the value at a specified index.
+//
+// Internally, the queue:
+// - Stores entries in a fixed-size array of DATA_SIZE width.
+// - Maintains a 'valid' bit per entry to track active/inactive slots.
+// - Supports lazy deletion (removed elements are marked invalid and skipped).
+//
+// Module Parameters:
+// - DATA_SIZE:      Width of each data element (default 64 bits).
+// - QUEUE_CAPACITY: Maximum number of elements (default 65536).
+// - INDEX_WIDTH:    Width of indices to address the queue (calculated from capacity).
+//
+// Inputs:
+// - clk:        Clock signal.
+// - rst:        Reset signal.
+// - value_in:   Value to push or modify.
+// - op_index:   Index for REMOVE or MODIFY operations.
+// - op:         Operation code (NOOP, PUSH, POP, PEEK, REMOVE, MODIFY).
+//
+// Outputs:
+// - value_out:  Output value (for PEEK or POP).
+// - success:    High if the operation succeeded.
+// - state:      Current internal state (IDLE, BUSY, FLUSHING, DONE).
+//
+// Notes:
+// - On reset, the queue is cleared.
+// - Popping and peeking skip over invalid entries automatically.
+// - Physical data movement is avoided for performance; entries are only marked valid/invalid.
+// - Modifying any inputs or outputs before state == DONE is undefined behavior.
+//
+// -----------------------------------------------------------------------------
+
 module queue #(
-    parameter DATA_SIZE = 64,
-    parameter FIFO_SIZE = 64,//MUST BE POWER OF 2!!;
-    parameter PTR_WIDTH = $clog2(FIFO_SIZE),
-    parameter SCAN_SIZE = 16, //MUST BE POWER OF 2!!;
-    parameter SCAN_WIDTH = $clog2(SCAN_SIZE)
+    parameter DATA_SIZE      = 64,
+    parameter QUEUE_CAPACITY = 65536, // Max number of elements in queue (including elements marked as removed but have not yet been cleared)
+                                      // Change this in Queue.hpp if modified
+    parameter INDEX_WIDTH    = $clog2(QUEUE_CAPACITY)
 )(
-    input logic                     clk,
-    input logic                     reset,
+    input                        clk,
+    input                        rst,
+    input  reg [DATA_SIZE-1:0]   value_in,
+    input  reg [INDEX_WIDTH-1:0] index,
+    input  reg [2:0]             op,
 
-    input logic [1:0]               op_flag, // 00=push, 01=pop, 10=remove, 11=modify
-    input logic [PTR_WIDTH-1:0]     op_index,
-    input logic [DATA_SIZE-1:0]     op_data,
-
-    output logic [DATA_SIZE-1:0]    pop_data,
-
-    output logic                    full,
-    output logic                    empty,
-    output logic [PTR_WIDTH:0]      size,
-    output logic                    error_reg, // “global” push/pop overflow/underflow
-    output logic                    error_rem, // remove/modify invalid
-    output logic                    error_time // Not finished scanning for next head yet!
+    output reg [DATA_SIZE-1:0]   value_out,
+    output reg                   success,
+    output reg [1:0]             state,
+    output reg [31:0]            size
 );
+    // Edit these in Queue.hpp too if any changes are needed.
+    localparam IDLE = 0, BUSY = 1, FLUSHING = 2, DONE = 3; // state
+    localparam NOOP = 0, PUSH = 1, POP = 2, PEEK = 3, REMOVE = 4, MODIFY = 5; // operation
 
-    logic [DATA_SIZE-1:0]       memory[0:FIFO_SIZE-1];
-    logic                       valid[0:FIFO_SIZE-1];
+    reg [INDEX_WIDTH-1:0] head_index; // index of first valid entry, or 0 if empty
+    reg [INDEX_WIDTH-1:0] tail_index; // index after last valid entry, or 0 if empty
 
-    logic [PTR_WIDTH-1:0]       head;
-    logic [PTR_WIDTH-1:0]       tail;
-    logic [PTR_WIDTH:0]         counter;
-    logic [PTR_WIDTH:0]         real_counter;
+    reg [DATA_SIZE-1:0] data  [0:QUEUE_CAPACITY-1];
 
-    logic                       error_t;
-    logic                       error_r;
-    logic                       error_g;
+    // Denotes if entry is actually in the queue (and not removed)
+    // Only defined for indices between head_index and tail_index (wrapping around if needed)
+    // Otherwise, resetting would be expensive
+    reg                 valid [0:QUEUE_CAPACITY-1];
 
-    logic [SCAN_SIZE-1: 0]      chunk;
-    logic [SCAN_WIDTH: 0]       offset;
-
-    logic                       is_pop;
-    logic                       is_push;
-    logic                       is_remove;
-    logic                       is_modify;
-
-    logic [PTR_WIDTH-1:0]       head_next;
-    logic [PTR_WIDTH-1:0]       tail_next;
-    logic [PTR_WIDTH:0]         real_counter_next;
-    logic [PTR_WIDTH:0]         available;
-
-    function automatic logic [SCAN_WIDTH:0] priority16(input logic [SCAN_SIZE-1:0] c);
-        for (int i = 0; i < SCAN_SIZE; i++) begin
-            if (c[i]) return i;
-        end
-        return SCAN_SIZE;
-    endfunction
-
-    always_comb begin //All the modulos are ignored because of the "truncating" feature. Careful when editing!
-        is_push     = (op_flag == 2'b00) && (counter < FIFO_SIZE);
-        is_pop      = (op_flag == 2'b01) && (real_counter > 0);
-        is_remove   = (op_flag == 2'b10) && (valid[op_index]);
-        is_modify   = (op_flag == 2'b11) && (valid[op_index]);
-        
-        tail_next   = tail + is_push;
-        head_next   = head + is_pop;
-
-        for (int i = 0; i < SCAN_SIZE; i++) begin
-            chunk[i] = valid[(head_next + i) & (FIFO_SIZE - 1)];
-        end
-        offset = priority16(chunk);
-
-        available = {1'b0, tail} - {1'b0, head_next};
-        if (offset > available) begin
-            offset = available;
-        end
-
-        head_next = head_next + offset;
-
-        real_counter_next = real_counter + is_push - is_pop - is_remove; //It should be undefined behavior to have both is_pop && is_remove = 1;
+    // For debugging
+    integer i;
+    initial begin
+        for (i = 0; i < QUEUE_CAPACITY; i = i + 1) valid[i] = 0;
     end
 
-    always_ff @(posedge clk or posedge reset) begin
-        if (reset) begin
-            head            <= 0;
-            tail            <= 0;
-            counter         <= 0;
-            real_counter    <= 0;
-            error_g         <= 0;
-            error_r         <= 0;
-            error_t         <= 0;
-            // for (int i = 0; i < FIFO_SIZE; i++) begin
-            //     valid[i]    <= 0;
-            //     memory[i]   <= 0;
-            // end (Maybe reset the memory when the queue is recycled?)
+    always @(posedge clk) begin
+        if (rst) begin 
+            success    <= 0;
+            value_out  <= 0;
+            head_index <= 0;
+            tail_index <= 0;
+            size       <= 0;
+            state      <= IDLE;
         end else begin
-            // --- push ---
-            if (op_flag == 2'b00) begin 
-                if (counter < FIFO_SIZE) begin
-                    memory[tail]    <= op_data;
-                    valid[tail]     <= 1;
-                    error_g         <= 0;
-                end else begin 
-                    error_g         <= 1;
-                end
-            end
-
-            // --- pop ---
-            if (op_flag == 2'b01) begin
-                if (real_counter > 0) begin
-                    if (!valid[head]) begin
-                        error_t     <= 1;
+            case (state)
+                IDLE: begin
+                    success <= 0;
+                    value_out <= 0;
+                    if (op != NOOP) begin
+                        state <= BUSY;
                     end else begin
-                        valid[head] <= 0;
-                        error_t     <= 0;
+                        state <= DONE;
                     end
-                end else begin
-                    error_g         <= 1; 
                 end
-            end
-            
-            // --- remove & modify ---
-            if (op_flag == 2'b10 || op_flag == 2'b11) begin
-                if (valid[op_index]) begin
-                    if (op_flag == 2'b10) begin
-                        valid[op_index]     <= 0;
-                    end else begin
-                        memory[op_index]    <= op_data;
-                    end
-                    error_r                 <= 0;
-                end else begin 
-                    error_r                 <= 1;
-                end
-            end else begin
-                error_r                     <= 0;    
-            end
 
-            head            <= head_next;
-            tail            <= tail_next;
-            counter         <= {1'b0, tail} - {1'b0, head}; 
-            real_counter    <= real_counter_next;  
+                BUSY: begin
+                    case (op)
+                        PUSH: begin
+                            if (size > 0) begin
+                                if (head_index == tail_index) begin
+                                    // No room for additional entry
+                                    success <= 0;
+                                    state <= DONE;
+                                end else begin
+                                    data[tail_index] <= value_in;
+                                    valid[tail_index] <= 1;
+                                    tail_index <= tail_index + 1;
+                                    size <= size + 1;
+                                    value_out <= value_in;
+                                    success <= 1;
+                                    state <= DONE;
+                                end
+                            end else begin
+                                data[tail_index] <= value_in;
+                                valid[tail_index] <= 1;
+                                head_index <= 0;
+                                tail_index <= 1;
+                                size <= 1;
+                                value_out <= value_in;
+                                success <= 1;
+                                state <= DONE;
+                            end
+                        end
+
+                        PEEK: begin
+                            if (size > 0) begin
+                                success <= 1;
+                                value_out <= data[head_index];
+                                state <= DONE;
+                            end else begin
+                                success <= 0;
+                                state <= DONE;
+                            end
+                        end
+
+                        POP: begin
+                            if (size > 0) begin
+                                value_out <= data[head_index];
+                                // valid[head_index] <= 0;
+                                head_index <= head_index + 1;
+                                size <= size - 1;
+                                success <= 1;
+                                state <= FLUSHING;
+                            end else begin
+                                success <= 0;
+                                state <= DONE;
+                            end
+                        end
+
+                        REMOVE: begin
+                            // do error checking plus other stuff, decrement size, etc.
+                            valid[index] <= 0;
+                            state <= DONE;
+                        end
+
+                        MODIFY: begin
+                            state <= DONE;
+                        end
+                    endcase
+                end
+
+                FLUSHING: begin
+                    if (size > 0 && !valid[head_index]) begin
+                        head_index <= head_index + 1;
+                    end else begin
+                        state <= DONE;
+                    end
+                end
+
+                DONE: begin
+                    state <= IDLE;
+                end
+            endcase
         end
     end
-
-    assign pop_data     = (op_flag == 2'b01 && valid[head]) ? memory[head] : '0; //Need to check error_time first! Don't assume this is correct!
-
-    assign empty        = (real_counter == 0);
-    assign full         = (counter == FIFO_SIZE);
-    assign size         = real_counter; // This is the real size!
-    assign error_reg    = error_g;
-    assign error_rem    = error_r;
-    assign error_time   = error_t;
 endmodule

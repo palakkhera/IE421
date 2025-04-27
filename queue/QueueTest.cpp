@@ -1,44 +1,45 @@
 #include "Queue.hpp"
 #include <cassert>
+#include <iostream>
 
 void test_enqueue_dequeue() {
     Queue q;
-    assert(q.enqueue(10));
-    assert(q.enqueue(20));
-    uint32_t out;
-    assert(q.dequeue(out));
+    assert(q.push(10));
+    assert(q.push(20));
+    uint64_t out;
+    assert(q.pop(out));
     assert(out == 10);
-    assert(q.dequeue(out));
+    assert(q.pop(out));
     assert(out == 20);
     std::cout << "test_enqueue_dequeue passed\n";
 }
 
 void test_peek() {
     Queue q;
-    assert(q.enqueue(42));
-    uint32_t out;
+    assert(q.push(42));
+    uint64_t out;
     assert(q.peek(out));
     assert(out == 42);
-    assert(q.dequeue(out));
+    assert(q.pop(out));
     assert(out == 42);
     std::cout << "test_peek passed\n";
 }
 
 void test_empty_dequeue() {
     Queue q;
-    uint32_t out;
-    assert(!q.dequeue(out));
+    uint64_t out;
+    assert(!q.pop(out));
     std::cout << "test_empty_dequeue passed\n";
 }
 
 void test_fill_and_empty(int count) {
     Queue q;
     for (int i = 0; i < count; i++) {
-        assert(q.enqueue(i));
+        assert(q.push(i));
     }
     for (int i = 0; i < count; i++) {
-        uint32_t out;
-        assert(q.dequeue(out));
+        uint64_t out;
+        assert(q.pop(out));
         assert(out == i);
     }
     std::cout << "test_fill_and_empty passed\n";
@@ -46,13 +47,13 @@ void test_fill_and_empty(int count) {
 
 void test_interleaved_ops() {
     Queue q;
-    uint32_t out;
-    assert(q.enqueue(1));
-    assert(q.enqueue(2));
-    assert(q.dequeue(out) && out == 1);
-    assert(q.enqueue(3));
-    assert(q.dequeue(out) && out == 2);
-    assert(q.dequeue(out) && out == 3);
+    uint64_t out;
+    assert(q.push(1));
+    assert(q.push(2));
+    assert(q.pop(out) && out == 1);
+    assert(q.push(3));
+    assert(q.pop(out) && out == 2);
+    assert(q.pop(out) && out == 3);
     std::cout << "test_interleaved_ops passed\n";
 }
 

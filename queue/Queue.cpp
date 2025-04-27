@@ -5,10 +5,15 @@ Queue::Queue() {
     reset();
 }
 
+Queue::~Queue() {
+    dut->final();
+    delete dut;
+}
+
 void Queue::reset() {
-    dut->reset = 1;
+    dut->rst = 1;
     step();
-    dut->reset = 0;
+    dut->rst = 0;
 }
 
 void Queue::step() {
@@ -21,47 +26,53 @@ void Queue::step() {
 }
 
 bool Queue::push(uint64_t data) {
-    dut->op_flag = 0b00;
-    dut->op_data = data;
-    dut->op_index = 0;
+    dut->op = PUSH;
+    dut->value_in = data;
     step();
-    return !(dut->error_reg);
+    return dut->success;
 }
 
 bool Queue::pop(uint64_t& out) {
-    dut->op_flag = 0b01;
-    dut->op_data = 0;
-    dut->op_index = 0;
+    dut->op = POP;
     step();
-    if (!dut->error_time && !dut->error_reg) {
-        out = dut->pop_data;
+    if (dut->success) {
+        out = dut->value_out;
+        return true;
+    }
+    return false;
+}
+
+bool Queue::peek(uint64_t& out) {
+    dut->op = PEEK;
+    step();
+    if (dut->success) {
+        out = dut->value_out;
         return true;
     }
     return false;
 }
 
 bool Queue::remove(uint32_t index) {
-    dut->op_flag = 0b10;
-    dut->op_data = 0;
-    dut->op_index = index;
+    dut->op = REMOVE;
+    dut->index = index;
     step();
-    return !(dut->error_rem);
+    return dut->success;
 }
 
 bool Queue::modify(uint32_t index, uint64_t data) {
-    dut->op_flag = 0b11;
-    dut->op_data = data;
-    dut->op_index = index;
+    dut->op = MODIFY;
+    dut->value_in = data;
+    dut->index = index;
     step();
-    return !(dut->error_rem);
+    return dut->success;
 }
 
 bool Queue::is_full() const {
-    return dut->full;
+    return dut->size >= QUEUE_CAPACITY;
 }
 
 bool Queue::is_empty() const {
-    return dut->empty;
+    return dut->size == 0;
 }
 
 uint32_t Queue::get_size() const {

@@ -21,6 +21,9 @@ public:
     // Pop the front element from the queue
     bool pop(uint64_t& out);
 
+    // Read the front element of the queue
+    bool peek(uint64_t& out);
+
     // Remove an element by index
     bool remove(uint32_t index);
 
@@ -38,4 +41,9 @@ public:
 
 private:
     Vqueue* dut;
-}
+};
+
+// Edit these in queue.v too if any changes are needed.
+constexpr uint32_t QUEUE_CAPACITY = 65536;
+enum QueueState { IDLE = 0, BUSY = 1, FLUSHING = 2, DONE = 3 }; // state
+enum QueueOp { NOOP = 0, PUSH = 1, POP = 2, PEEK = 3, REMOVE = 4, MODIFY = 5 }; // operation
